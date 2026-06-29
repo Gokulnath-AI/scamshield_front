@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { X, ShieldAlert, CheckCircle2, Send, AlertCircle } from 'lucide-react';
+import { X, ShieldAlert, CheckCircle2, Send, AlertCircle, Loader2 } from 'lucide-react';
+import { saveScamReport } from '../lib/supabase';
 
 interface ReportModalProps {
   isOpen: boolean;
@@ -12,6 +13,8 @@ export const ReportModal: React.FC<ReportModalProps> = ({ isOpen, onClose, initi
   const [category, setCategory] = useState('UPI Bill Scam');
   const [messageText, setMessageText] = useState(initialText);
   const [submitted, setSubmitted] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [refId, setRefId] = useState('');
 
   React.useEffect(() => {
     if (initialText) {
@@ -21,22 +24,38 @@ export const ReportModal: React.FC<ReportModalProps> = ({ isOpen, onClose, initi
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSubmitted(true);
-    setTimeout(() => {
-      setSubmitted(false);
-      setVpaOrPhone('');
-      setMessageText('');
-      onClose();
-    }, 2800);
+    setIsSubmitting(true);
+
+    const success = await saveScamReport({
+      message: messageText,
+      sender_info: vpaOrPhone,
+      category: category,
+      description: `Category: ${category} | Sender: ${vpaOrPhone}`,
+      scam_score: undefined,
+    });
+
+    setIsSubmitting(false);
+
+    if (success) {
+      const id = `IND-${Math.floor(100000 + Math.random() * 900000)}`;
+      setRefId(id);
+      setSubmitted(true);
+      setTimeout(() => {
+        setSubmitted(false);
+        setVpaOrPhone('');
+        setMessageText('');
+        setRefId('');
+        onClose();
+      }, 3500);
+    }
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fadeIn">
       <div className="relative w-full max-w-lg glass-vessel bg-[#0c1324] border border-[#8aebff]/30 rounded-3xl p-6 sm:p-9 shadow-2xl shadow-[#8aebff]/10">
         
-        {/* Close Button */}
         <button 
           onClick={onClose}
           className="absolute top-6 right-6 p-2 rounded-full bg-white/5 hover:bg-white/10 text-[#bbc9cd] hover:text-white transition-colors cursor-pointer"
@@ -49,12 +68,12 @@ export const ReportModal: React.FC<ReportModalProps> = ({ isOpen, onClose, initi
             <div className="w-16 h-16 rounded-full bg-emerald-500/20 border border-emerald-400 text-emerald-400 flex items-center justify-center mb-5 shadow-lg shadow-emerald-500/10">
               <CheckCircle2 className="w-9 h-9" />
             </div>
-            <h3 className="font-['Montserrat'] text-2xl font-bold text-white mb-2">Threat Flagged Successfully</h3>
+            <h3 className="font-['Montserrat'] text-2xl font-bold text-white mb-2">Report Saved Successfully</h3>
             <p className="text-[#bbc9cd] text-sm max-w-md mx-auto">
-              Thank you for contributing to Indian digital security. Your report has been logged to our neural scrubbing node and queued for NPCI Chakshu verification.
+              Your scam report has been saved to our database and queued for review. Thank you for contributing to Indian digital security.
             </p>
             <div className="mt-6 font-['Geist'] text-xs text-[#8aebff] font-semibold tracking-widest uppercase">
-              Reference ID: #IND-{Math.floor(100000 + Math.random() * 900000)}
+              Reference ID: #{refId}
             </div>
           </div>
         ) : (
@@ -65,7 +84,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({ isOpen, onClose, initi
               </div>
               <div>
                 <h3 className="font-['Montserrat'] text-2xl font-bold text-white">Report Scam Incident</h3>
-                <p className="text-xs font-['Geist'] text-[#bbc9cd]">Help safeguard Indian UPI & banking networks</p>
+                <p className="text-xs font-['Geist'] text-[#bbc9cd]">Saved to database for review & cyber crime reporting</p>
               </div>
             </div>
 
@@ -99,12 +118,14 @@ export const ReportModal: React.FC<ReportModalProps> = ({ isOpen, onClose, initi
                   <option value="Telegram Task">Telegram Part-Time Task Scam</option>
                   <option value="Lottery Scam">Lucky Draw / Fake Gift Claim Tax</option>
                   <option value="Bank Phishing">SBI / Bank KYC Account Block Alert</option>
+                  <option value="Login Phishing">Fake Login / Account Security Alert</option>
+                  <option value="Other">Other Scam Type</option>
                 </select>
               </div>
 
               <div>
                 <label className="block text-xs font-['Geist'] font-semibold uppercase tracking-wider text-[#bbc9cd] mb-1.5">
-                  Suspicious Message Content (Optional)
+                  Suspicious Message Content
                 </label>
                 <textarea 
                   rows={3}
@@ -117,7 +138,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({ isOpen, onClose, initi
 
               <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-3.5 flex items-start gap-2.5 text-xs text-amber-200">
                 <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                <span>For urgent financial loss where money was already debited, immediately call National Cyber Helpline <strong>1930</strong> or visit cybercrime.gov.in</span>
+                <span>For urgent financial loss, immediately call National Cyber Helpline <strong>1930</strong> or visit cybercrime.gov.in</span>
               </div>
 
               <div className="pt-3 flex gap-3">
@@ -130,16 +151,19 @@ export const ReportModal: React.FC<ReportModalProps> = ({ isOpen, onClose, initi
                 </button>
                 <button 
                   type="submit"
-                  className="w-2/3 py-3 rounded-xl bg-gradient-to-r from-[#8aebff] to-[#22d3ee] text-[#070d1f] font-['Montserrat'] font-extrabold text-sm flex items-center justify-center gap-2 hover:opacity-95 shadow-lg shadow-[#8aebff]/20 transition-all cursor-pointer"
+                  disabled={isSubmitting}
+                  className="w-2/3 py-3 rounded-xl bg-gradient-to-r from-[#8aebff] to-[#22d3ee] text-[#070d1f] font-['Montserrat'] font-extrabold text-sm flex items-center justify-center gap-2 hover:opacity-95 shadow-lg shadow-[#8aebff]/20 transition-all cursor-pointer disabled:opacity-50"
                 >
-                  <Send className="w-4 h-4" />
-                  Submit Report
+                  {isSubmitting ? (
+                    <><Loader2 className="w-4 h-4 animate-spin" /><span>Saving...</span></>
+                  ) : (
+                    <><Send className="w-4 h-4" /><span>Submit Report</span></>
+                  )}
                 </button>
               </div>
             </form>
           </>
         )}
-
       </div>
     </div>
   );
