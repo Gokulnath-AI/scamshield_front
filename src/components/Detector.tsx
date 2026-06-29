@@ -3,6 +3,7 @@ import { SearchCheck, Activity, Loader2, Info, ShieldAlert, RotateCcw, AlertTria
 import { SAMPLE_MESSAGES } from '../data/samples';
 import { AnalysisResult, SampleType } from '../types';
 import { Gauge } from './Gauge';
+import { saveScanResult } from '../lib/supabase';
 
 // Use Netlify function (which calls Render + has heuristic fallback)
 const ML_API = '/api/predict';
