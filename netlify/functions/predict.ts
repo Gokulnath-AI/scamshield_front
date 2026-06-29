@@ -1,7 +1,7 @@
 import type { Handler } from "@netlify/functions";
 
 const SCAMSHIELD_API =
-  process.env.SCAMSHIELD_API_URL || "https://scamshield-14i0.onrender.com";
+  process.env.SCAMSHIELD_API_URL || "https://scamshield-rwj6.onrender.com";
 
 function heuristicAnalyze(message: string) {
   const lower = message.toLowerCase();
