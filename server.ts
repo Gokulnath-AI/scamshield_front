@@ -7,7 +7,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
-const SCAMSHIELD_API = process.env.SCAMSHIELD_API_URL || 'https://scamshield-14i0.onrender.com';
+const SCAMSHIELD_API = process.env.SCAMSHIELD_API_URL || 'https://scamshield-rwj6.onrender.com';
 
 app.use(express.json());
 
