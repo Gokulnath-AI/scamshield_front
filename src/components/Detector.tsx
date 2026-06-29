@@ -345,5 +345,5 @@ export const Detector: React.FC<DetectorProps> = ({ onReportMessage }) => {
       )}
 
     </section>
-  );
+  )
 };
