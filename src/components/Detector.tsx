@@ -141,20 +141,30 @@ export const Detector: React.FC<DetectorProps> = ({ onReportMessage }) => {
 
       if (res.ok) {
         const raw = await res.json() as Record<string, unknown>;
-        setResult(mapNetlifyResponse(raw));
-      } else {
-        throw new Error(`API ${res.status}`);
+        const mapped = mapNetlifyResponse(raw);
+        setResult(mapped);
+
+        // Save to Supabase
+        saveScanResult({
+          message: message.trim(),
+          label: mapped.label,
+          scam_score: Math.round(mapped.confidence * 100),
+          risk_level: mapped.confidence >= 0.8 ? 'High' : mapped.confidence >= 0.5 ? 'Medium' : 'Safe',
+          analysis: mapped.analysis,
+        });
       }
     } catch {
-      setResult(heuristicFallback(message));
-    } finally {
-      clearTimeout(stepTimer1);
-      clearTimeout(stepTimer2);
-      clearTimeout(coldStartTimer);
-      setColdStart(false);
-      setIsLoading(false);
-    }
-  };
+      const fallback = heuristicFallback(message);
+      setResult(fallback);
+
+      // Save heuristic result to Supabase too
+      saveScanResult({
+        message: message.trim(),
+        label: fallback.label,
+        scam_score: Math.round(fallback.confidence * 100),
+        risk_level: fallback.confidence >= 0.8 ? 'High' : fallback.confidence >= 0.5 ? 'Medium' : 'Safe',
+        analysis: fallback.analysis,
+    });
 
   const loadingMessages = [
     'Parsing syntactic structure & VPAs...',
