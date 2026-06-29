@@ -5,7 +5,6 @@ import { AnalysisResult, SampleType } from '../types';
 import { Gauge } from './Gauge';
 import { saveScanResult } from '../lib/supabase';
 
-// Use Netlify function (which calls Render + has heuristic fallback)
 const ML_API = '/api/predict';
 
 interface DetectorProps {
@@ -32,16 +31,12 @@ export const Detector: React.FC<DetectorProps> = ({ onReportMessage }) => {
   function mapMLResponse(raw: Record<string, unknown>): AnalysisResult {
     const prediction = raw.prediction as string;
     const isSpam = prediction === 'spam' || prediction === 'Scam';
-    
-    // Handle BOTH old API format and new XGBoost format
-    const scamScore = typeof raw.scam_score === 'number' ? raw.scam_score : 
+    const scamScore = typeof raw.scam_score === 'number' ? raw.scam_score :
                       typeof raw.risk_percentage === 'number' ? raw.risk_percentage : 50;
     const confidence = scamScore > 1 ? scamScore / 100 : scamScore;
-    
     const riskLevel = (raw.risk_level as string) || (raw.risk_factor as string) || 'Medium';
     const analysis = (raw.recommended_action as string) || (raw.solution as string) || (raw.analysis as string) || '';
     const actionSteps = raw.actionSteps as string[] | undefined;
-
     const riskLabel = riskLevel === 'High' ? 'critical' : riskLevel === 'Medium' ? 'moderate' : 'low-level';
 
     return {
@@ -63,7 +58,6 @@ export const Detector: React.FC<DetectorProps> = ({ onReportMessage }) => {
     };
   }
 
-  // Also handle Netlify function response format (label, confidence, analysis, actionSteps)
   function mapNetlifyResponse(raw: Record<string, unknown>): AnalysisResult {
     if (raw.label) {
       return {
@@ -144,7 +138,6 @@ export const Detector: React.FC<DetectorProps> = ({ onReportMessage }) => {
         const mapped = mapNetlifyResponse(raw);
         setResult(mapped);
 
-        // Save to Supabase
         saveScanResult({
           message: message.trim(),
           label: mapped.label,
@@ -152,19 +145,28 @@ export const Detector: React.FC<DetectorProps> = ({ onReportMessage }) => {
           risk_level: mapped.confidence >= 0.8 ? 'High' : mapped.confidence >= 0.5 ? 'Medium' : 'Safe',
           analysis: mapped.analysis,
         });
+      } else {
+        throw new Error(`API ${res.status}`);
       }
     } catch {
       const fallback = heuristicFallback(message);
       setResult(fallback);
 
-      // Save heuristic result to Supabase too
       saveScanResult({
         message: message.trim(),
         label: fallback.label,
         scam_score: Math.round(fallback.confidence * 100),
         risk_level: fallback.confidence >= 0.8 ? 'High' : fallback.confidence >= 0.5 ? 'Medium' : 'Safe',
         analysis: fallback.analysis,
-    });
+      });
+    } finally {
+      clearTimeout(stepTimer1);
+      clearTimeout(stepTimer2);
+      clearTimeout(coldStartTimer);
+      setColdStart(false);
+      setIsLoading(false);
+    }
+  };
 
   const loadingMessages = [
     'Parsing syntactic structure & VPAs...',
@@ -175,7 +177,7 @@ export const Detector: React.FC<DetectorProps> = ({ onReportMessage }) => {
   return (
     <section id="detector" className="max-w-[1024px] mx-auto px-6 py-24">
       <div className="glass-vessel rounded-[28px] p-8 md:p-14 relative overflow-hidden bg-[#0c1324]/90 border border-white/10 shadow-2xl">
-        
+
         <div className="flex items-center gap-3.5 mb-8">
           <div className="bg-[#8aebff]/10 p-3 rounded-2xl border border-[#8aebff]/30 text-[#8aebff]">
             <SearchCheck className="w-7 h-7" />
@@ -253,14 +255,14 @@ export const Detector: React.FC<DetectorProps> = ({ onReportMessage }) => {
       {result && (
         <div id="resultsPanel" className="mt-12 glass-vessel rounded-[28px] p-8 md:p-14 relative bg-[#0c1324]/95 border border-white/15 shadow-2xl animate-fadeIn">
           <div className="grid md:grid-cols-12 gap-10 items-center">
-            
+
             <div className="md:col-span-5 flex flex-col items-center text-center border-b md:border-b-0 md:border-r border-white/10 pb-8 md:pb-0 md:pr-6">
               <Gauge score={Math.round(result.confidence * 100)} isScam={result.label === 'Scam'} />
-              
+
               <div className="mt-6">
                 <div className={`inline-flex items-center gap-2 px-5 py-2 rounded-full font-['Geist'] font-bold uppercase tracking-widest text-xs mb-3 shadow-md ${
-                  result.label === 'Scam' 
-                    ? 'bg-[#ffb4ab]/20 text-[#ffb4ab] border border-[#ffb4ab]/40 shadow-[#ffb4ab]/10' 
+                  result.label === 'Scam'
+                    ? 'bg-[#ffb4ab]/20 text-[#ffb4ab] border border-[#ffb4ab]/40 shadow-[#ffb4ab]/10'
                     : 'bg-[#68f5b8]/20 text-[#68f5b8] border border-[#68f5b8]/40 shadow-[#68f5b8]/10'
                 }`}>
                   {result.label === 'Scam' ? (
@@ -280,7 +282,7 @@ export const Detector: React.FC<DetectorProps> = ({ onReportMessage }) => {
             </div>
 
             <div className="md:col-span-7 flex flex-col gap-6">
-              
+
               <div className="bg-white/[0.04] border border-white/10 rounded-2xl p-6 relative overflow-hidden">
                 <div className="absolute top-0 left-0 w-1.5 h-full bg-[#8aebff]"></div>
                 <h4 className="font-['Geist'] text-xs font-bold tracking-widest text-[#8aebff] mb-2.5 flex items-center gap-2 uppercase">
@@ -293,8 +295,8 @@ export const Detector: React.FC<DetectorProps> = ({ onReportMessage }) => {
               </div>
 
               <div className={`border rounded-2xl p-6 relative overflow-hidden ${
-                result.label === 'Scam' 
-                  ? 'bg-[#ffb4ab]/[0.06] border-[#ffb4ab]/25' 
+                result.label === 'Scam'
+                  ? 'bg-[#ffb4ab]/[0.06] border-[#ffb4ab]/25'
                   : 'bg-[#68f5b8]/[0.06] border-[#68f5b8]/25'
               }`}>
                 <div className={`absolute top-0 left-0 w-1.5 h-full ${result.label === 'Scam' ? 'bg-[#ffb4ab]' : 'bg-[#68f5b8]'}`}></div>
@@ -304,7 +306,7 @@ export const Detector: React.FC<DetectorProps> = ({ onReportMessage }) => {
                   <ShieldAlert className="w-4 h-4" />
                   Recommended Action Matrix (India)
                 </h4>
-                
+
                 <ul className="space-y-2.5 text-xs sm:text-sm text-[#bbc9cd]">
                   {result.actionSteps.map((step, index) => (
                     <li key={index} className="flex items-start gap-2.5">
@@ -345,5 +347,5 @@ export const Detector: React.FC<DetectorProps> = ({ onReportMessage }) => {
       )}
 
     </section>
-  )
+  );
 };
