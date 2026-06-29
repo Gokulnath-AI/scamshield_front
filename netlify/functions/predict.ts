@@ -72,8 +72,8 @@ export const handler: Handler = async (event) => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             label: isSpam ? "Scam" : "Safe",
-            confidence: Math.round((data.risk_percentage ?? 50)) / 100,
-            analysis: data.solution || "",
+            confidence: (data.scam_score ?? 50) / 100,
+            analysis: data.recommended_action || data.solution || "",
             actionSteps: isSpam
               ? ["Do not click any links", "Block the sender immediately", "Report to 1930 Cyber Helpline"]
               : ["Verify unknown senders independently", "Never share OTPs"],
