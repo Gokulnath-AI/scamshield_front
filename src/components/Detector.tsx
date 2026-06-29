@@ -4,7 +4,8 @@ import { SAMPLE_MESSAGES } from '../data/samples';
 import { AnalysisResult, SampleType } from '../types';
 import { Gauge } from './Gauge';
 
-const ML_API = 'https://scamshield-14i0.onrender.com/predict';
+// Use Netlify function (which calls Render + has heuristic fallback)
+const ML_API = '/api/predict';
 
 interface DetectorProps {
   onReportMessage: (text: string) => void;
@@ -28,19 +29,27 @@ export const Detector: React.FC<DetectorProps> = ({ onReportMessage }) => {
   };
 
   function mapMLResponse(raw: Record<string, unknown>): AnalysisResult {
-    const isSpam = raw.prediction === 'spam';
-    const riskPct = typeof raw.risk_percentage === 'number' ? raw.risk_percentage : 50;
-    const factor = (raw.risk_factor as string) || 'Medium';
-    const solution = (raw.solution as string) || '';
-    const riskLabel = factor === 'High' ? 'critical' : factor === 'Medium' ? 'moderate' : 'low-level';
+    const prediction = raw.prediction as string;
+    const isSpam = prediction === 'spam' || prediction === 'Scam';
+    
+    // Handle BOTH old API format and new XGBoost format
+    const scamScore = typeof raw.scam_score === 'number' ? raw.scam_score : 
+                      typeof raw.risk_percentage === 'number' ? raw.risk_percentage : 50;
+    const confidence = scamScore > 1 ? scamScore / 100 : scamScore;
+    
+    const riskLevel = (raw.risk_level as string) || (raw.risk_factor as string) || 'Medium';
+    const analysis = (raw.recommended_action as string) || (raw.solution as string) || (raw.analysis as string) || '';
+    const actionSteps = raw.actionSteps as string[] | undefined;
+
+    const riskLabel = riskLevel === 'High' ? 'critical' : riskLevel === 'Medium' ? 'moderate' : 'low-level';
 
     return {
       label: isSpam ? 'Scam' : 'Safe',
-      confidence: Math.round(riskPct) / 100,
-      analysis: isSpam
-        ? `ML model (TF-IDF + SVM, trained on 36,000+ Indian scam samples) detected a ${riskLabel} threat. ${solution}`
-        : `Message passed all scam detection filters with ${factor.toLowerCase()} risk. ${solution}`,
-      actionSteps: isSpam ? [
+      confidence: Number(confidence.toFixed(2)),
+      analysis: analysis || (isSpam
+        ? `ML model (XGBoost + TF-IDF bigrams, trained on Indian scam dataset) detected a ${riskLabel} threat.`
+        : `Message passed all scam detection filters with ${riskLevel.toLowerCase()} risk.`),
+      actionSteps: actionSteps || (isSpam ? [
         'Do not click any links or scan QR codes present in this message',
         'Never enter your UPI PIN or OTP to receive funds or unblock accounts',
         'Block the sender immediately on your SMS or WhatsApp application',
@@ -49,8 +58,21 @@ export const Detector: React.FC<DetectorProps> = ({ onReportMessage }) => {
         'Verify unknown senders independently before sharing any information',
         'Keep your mobile banking and UPI applications updated to the latest version',
         'Never share OTPs or security credentials over calls or messages'
-      ]
+      ])
     };
+  }
+
+  // Also handle Netlify function response format (label, confidence, analysis, actionSteps)
+  function mapNetlifyResponse(raw: Record<string, unknown>): AnalysisResult {
+    if (raw.label) {
+      return {
+        label: raw.label as string,
+        confidence: typeof raw.confidence === 'number' ? raw.confidence : 0.5,
+        analysis: (raw.analysis as string) || '',
+        actionSteps: (raw.actionSteps as string[]) || []
+      };
+    }
+    return mapMLResponse(raw);
   }
 
   function heuristicFallback(msg: string): AnalysisResult {
@@ -59,13 +81,15 @@ export const Detector: React.FC<DetectorProps> = ({ onReportMessage }) => {
     const flags: string[] = [];
 
     if (lower.includes('upi://') || lower.includes('@ybl') || lower.includes('@okaxis') || lower.includes('@paytm')) { score += 0.3; flags.push('UPI collection link'); }
-    if (lower.includes('kyc') || lower.includes('blocked') || lower.includes('suspend')) { score += 0.25; flags.push('KYC/suspension threat'); }
+    if (lower.includes('kyc') || lower.includes('blocked') || lower.includes('suspend') || lower.includes('deactivate')) { score += 0.25; flags.push('KYC/suspension threat'); }
     if (lower.includes('won') || lower.includes('lottery') || lower.includes('lucky draw') || lower.includes('iphone')) { score += 0.35; flags.push('fake prize offer'); }
     if (lower.includes('bit.ly') || lower.includes('.xyz') || lower.includes('http:') || lower.includes('apk')) { score += 0.25; flags.push('suspicious URL'); }
+    if (lower.includes('https:') && (lower.includes('verify') || lower.includes('secure') || lower.includes('login') || lower.includes('alert'))) { score += 0.35; flags.push('phishing URL with urgency'); }
     if (lower.includes('electricity') || lower.includes('overdue') || lower.includes('disconnect')) { score += 0.35; flags.push('utility impersonation'); }
     if (lower.includes('fedex') || lower.includes('cbi') || lower.includes('digital arrest') || lower.includes('aadhaar') || lower.includes('narcotics')) { score += 0.45; flags.push('digital arrest / courier scam'); }
     if (lower.includes('telegram') || lower.includes('part time') || lower.includes('daily income') || lower.includes('work from home')) { score += 0.4; flags.push('Telegram task scam'); }
     if (lower.includes('otp') || lower.includes('pin') || lower.includes('password')) { score += 0.3; flags.push('credential solicitation'); }
+    if (lower.includes('suspicious login') || lower.includes('new device') || lower.includes('was not you') || lower.includes('secure your account')) { score += 0.4; flags.push('fake login alert phishing'); }
 
     score = Math.min(0.98, Math.max(0.05, score));
     const isScam = score > 0.45;
@@ -99,7 +123,7 @@ export const Detector: React.FC<DetectorProps> = ({ onReportMessage }) => {
 
     const stepTimer1 = setTimeout(() => setLoadingStep(1), 800);
     const stepTimer2 = setTimeout(() => setLoadingStep(2), 1800);
-    const coldStartTimer = setTimeout(() => setColdStart(true), 5000);
+    const coldStartTimer = setTimeout(() => setColdStart(true), 8000);
 
     try {
       const controller = new AbortController();
@@ -116,7 +140,7 @@ export const Detector: React.FC<DetectorProps> = ({ onReportMessage }) => {
 
       if (res.ok) {
         const raw = await res.json() as Record<string, unknown>;
-        setResult(mapMLResponse(raw));
+        setResult(mapNetlifyResponse(raw));
       } else {
         throw new Error(`API ${res.status}`);
       }
@@ -134,7 +158,7 @@ export const Detector: React.FC<DetectorProps> = ({ onReportMessage }) => {
   const loadingMessages = [
     'Parsing syntactic structure & VPAs...',
     'Cross-referencing NPCI threat intelligence...',
-    'Running TF-IDF + SVM classification...'
+    'Running XGBoost + TF-IDF classification...'
   ];
 
   return (
@@ -147,7 +171,7 @@ export const Detector: React.FC<DetectorProps> = ({ onReportMessage }) => {
           </div>
           <div>
             <h2 className="font-['Montserrat'] text-3xl font-bold text-white tracking-tight">Message Analyzer</h2>
-            <p className="text-xs font-['Geist'] text-[#bbc9cd] mt-0.5">Real-time ML inspection â TF-IDF + SVM trained on 36,000+ Indian scam samples</p>
+            <p className="text-xs font-['Geist'] text-[#bbc9cd] mt-0.5">Real-time ML inspection — XGBoost + TF-IDF trained on Indian scam samples</p>
           </div>
         </div>
 
@@ -209,7 +233,7 @@ export const Detector: React.FC<DetectorProps> = ({ onReportMessage }) => {
               {coldStart ? 'Waking Up ML Engine...' : 'Analyzing Threat Vectors'}
             </h3>
             <p className="font-['Geist'] text-sm text-[#8aebff] font-medium animate-pulse">
-              {coldStart ? 'Free tier cold start â please wait up to 30s...' : (loadingMessages[loadingStep] || loadingMessages[0])}
+              {coldStart ? 'Free tier cold start — please wait up to 30s...' : (loadingMessages[loadingStep] || loadingMessages[0])}
             </p>
           </div>
         )}
