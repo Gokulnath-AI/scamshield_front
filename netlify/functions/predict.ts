@@ -67,16 +67,28 @@ export const handler: Handler = async (event) => {
       if (res.ok) {
         const data = await res.json();
         const isSpam = data.prediction === "spam";
+        const scamScore = typeof data.scam_score === "number" ? data.scam_score : 50;
+        const riskLevel = data.risk_level || "Medium";
         return {
           statusCode: 200,
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             label: isSpam ? "Scam" : "Safe",
-            confidence: (data.scam_score ?? 50) / 100,
-            analysis: data.recommended_action || data.solution || "",
+            confidence: scamScore / 100,
+            risk_level: riskLevel,
+            analysis: data.recommended_action || "",
             actionSteps: isSpam
-              ? ["Do not click any links", "Block the sender immediately", "Report to 1930 Cyber Helpline"]
-              : ["Verify unknown senders independently", "Never share OTPs"],
+              ? [
+                  "Do not click any links or scan QR codes present in this message",
+                  "Never enter your UPI PIN or OTP to receive funds or unblock accounts",
+                  "Block the sender immediately on your SMS or WhatsApp application",
+                  "Report to Chakshu portal on Sanchar Saathi or call 1930 Cyber Helpline",
+                ]
+              : [
+                  "Verify unknown senders independently before sharing any information",
+                  "Keep your mobile banking and UPI applications updated to the latest version",
+                  "Never share OTPs or security credentials over calls or messages",
+                ],
           }),
         };
       }
