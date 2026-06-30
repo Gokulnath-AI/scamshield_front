@@ -32,10 +32,10 @@ export const Detector: React.FC<DetectorProps> = ({ onReportMessage }) => {
     const prediction = raw.prediction as string;
     const isSpam = prediction === 'spam' || prediction === 'Scam';
     const scamScore = typeof raw.scam_score === 'number' ? raw.scam_score :
-                      typeof raw.risk_percentage === 'number' ? raw.risk_percentage : 50;
+                      typeof raw.confidence === 'number' ? (raw.confidence > 1 ? raw.confidence : raw.confidence * 100) : 50;
     const confidence = scamScore > 1 ? scamScore / 100 : scamScore;
-    const riskLevel = (raw.risk_level as string) || (raw.risk_factor as string) || 'Medium';
-    const analysis = (raw.recommended_action as string) || (raw.solution as string) || (raw.analysis as string) || '';
+    const riskLevel = (raw.risk_level as string) || 'Medium';
+    const analysis = (raw.recommended_action as string) || (raw.analysis as string) || '';
     const actionSteps = raw.actionSteps as string[] | undefined;
     const riskLabel = riskLevel === 'High' ? 'critical' : riskLevel === 'Medium' ? 'moderate' : 'low-level';
 
@@ -43,7 +43,7 @@ export const Detector: React.FC<DetectorProps> = ({ onReportMessage }) => {
       label: isSpam ? 'Scam' : 'Safe',
       confidence: Number(confidence.toFixed(2)),
       analysis: analysis || (isSpam
-        ? `ML model (XGBoost + TF-IDF bigrams, trained on Indian scam dataset) detected a ${riskLabel} threat.`
+        ? `ML model (XGBoost + TF-IDF bigrams, trained on 5,658 Indian scam samples) detected a ${riskLabel} threat.`
         : `Message passed all scam detection filters with ${riskLevel.toLowerCase()} risk.`),
       actionSteps: actionSteps || (isSpam ? [
         'Do not click any links or scan QR codes present in this message',
@@ -184,7 +184,7 @@ export const Detector: React.FC<DetectorProps> = ({ onReportMessage }) => {
           </div>
           <div>
             <h2 className="font-['Montserrat'] text-3xl font-bold text-white tracking-tight">Message Analyzer</h2>
-            <p className="text-xs font-['Geist'] text-[#bbc9cd] mt-0.5">Real-time ML inspection — XGBoost + TF-IDF trained on Indian scam samples</p>
+            <p className="text-xs font-['Geist'] text-[#bbc9cd] mt-0.5">Real-time ML inspection — XGBoost + TF-IDF trained on 5,658 Indian scam samples</p>
           </div>
         </div>
 
@@ -192,12 +192,12 @@ export const Detector: React.FC<DetectorProps> = ({ onReportMessage }) => {
           <textarea
             value={message}
             onChange={(e) => setMessage(e.target.value)}
-            maxLength={500}
+            maxLength={2000}
             placeholder="Paste a suspicious SMS, WhatsApp forward, telegram offer or UPI collect request here..."
             className="w-full h-52 bg-[#070d1f]/70 border border-white/15 rounded-2xl p-6 text-[#dce1fb] placeholder:text-[#bbc9cd]/40 focus:ring-2 focus:ring-[#8aebff]/50 focus:border-[#8aebff]/50 transition-all resize-none font-['Inter'] text-base leading-relaxed outline-none shadow-inner"
           ></textarea>
           <div className="absolute bottom-4 right-5 text-xs font-['Geist'] font-medium text-[#bbc9cd]/70 bg-[#070d1f]/80 px-2.5 py-1 rounded-md border border-white/5">
-            <span>{charCount}</span>/500
+            <span>{charCount}</span>/2000
           </div>
         </div>
 
