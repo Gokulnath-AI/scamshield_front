@@ -69,21 +69,22 @@ function heuristicAnalyze(message: string) {
 
 function mapBackendResponse(data: Record<string, unknown>) {
   const isSpam = data.prediction === 'spam';
-  const riskPct = typeof data.risk_percentage === 'number' ? data.risk_percentage : 50;
-  const confidence = Math.round(riskPct) / 100;
-  const factor = (data.risk_factor as string) || 'Medium';
-  const solution = (data.solution as string) || '';
+  const scamScore = typeof data.scam_score === 'number' ? data.scam_score : 50;
+  const confidence = Math.round(scamScore) / 100;
+  const riskLevel = (data.risk_level as string) || 'Medium';
+  const analysis = (data.recommended_action as string) || '';
 
-  const riskLabel = factor === 'High' ? 'critical' : factor === 'Medium' ? 'moderate' : 'low-level';
+  const riskLabel = riskLevel === 'High' ? 'critical' : riskLevel === 'Medium' ? 'moderate' : 'low-level';
 
-  const analysis = isSpam
-    ? `ML model (TF-IDF + SVM trained on 36,000+ Indian scam samples) detected a ${riskLabel} threat. ${solution}`
-    : `Message passed all scam detection filters with ${factor.toLowerCase()} risk. ${solution}`;
+  const fullAnalysis = isSpam
+    ? `ML model (XGBoost + TF-IDF bigrams, trained on 5,658 Indian scam samples) detected a ${riskLabel} threat. ${analysis}`
+    : `Message passed all scam detection filters with ${riskLevel.toLowerCase()} risk. ${analysis}`;
 
   return {
     label: isSpam ? 'Scam' : 'Safe',
     confidence,
-    analysis,
+    risk_level: riskLevel,
+    analysis: fullAnalysis,
     actionSteps: isSpam ? [
       'Do not click any links or scan QR codes present in this message',
       'Never enter your UPI PIN, OTP or Aadhaar to receive funds or unblock accounts',
@@ -120,7 +121,7 @@ app.post('/api/predict', async (req, res) => {
 
       if (backendRes.ok) {
         const data = await backendRes.json() as Record<string, unknown>;
-        console.log(`[ML] prediction=${data.prediction} risk=${data.risk_percentage}%`);
+        console.log(`[ML] prediction=${data.prediction} scam_score=${data.scam_score} risk=${data.risk_level}`);
         return res.json(mapBackendResponse(data));
       } else {
         console.warn(`[ML] Backend returned ${backendRes.status}, falling back to heuristic`);
