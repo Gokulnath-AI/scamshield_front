@@ -1,6 +1,0 @@
-{
-  "name": "ScamShield",
-  "description": "AI-Powered Scam Detection for India protecting against UPI fraud, phishing, and OTP scams.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
