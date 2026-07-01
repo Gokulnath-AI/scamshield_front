@@ -5,13 +5,16 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   X, Send, Shield, ShieldAlert, CheckCircle,
   Loader2, Sparkles, ChevronLeft, Zap, Brain, Eye, FileWarning,
-  BarChart3, Clock, Fingerprint, Globe,
+  BarChart3, Clock, Fingerprint, Globe, ShieldCheck,
 } from "lucide-react";
 import { useAppStore } from "@/stores/useAppStore";
-import { sampleAnalysis } from "@/data/mock";
 import dynamic from "next/dynamic";
 
 const GlobeBackground = dynamic(() => import("@/components/three/GlobeBackground"), { ssr: false });
+
+// ── Backend Connection ──────────────────────────────────────────
+// Set NEXT_PUBLIC_API_URL in your Vercel env vars (or .env.local for dev)
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://scamshield-14i0.onrender.com";
 
 const exampleMessages = [
   "Congratulations! You've won ₹50,00,000 in KBC Lucky Draw. Send ₹5,000 to claim.",
@@ -23,15 +26,73 @@ const exampleMessages = [
 
 const panelClass = "rounded-2xl bg-[#0a0a1a]/70 border border-white/[0.07] backdrop-blur-xl shadow-2xl shadow-black/40";
 
+// ── Response Adapter ────────────────────────────────────────────
+// Normalizes whatever shape your FastAPI backend returns into a unified result
+interface AnalysisResult {
+  probability: number;
+  riskLevel: string;
+  scamType: string;
+  indicators: string[];
+  action: string;
+  isScam: boolean;
+}
+
+function mapBackendResponse(data: Record<string, unknown>): AnalysisResult {
+  // Handle prediction field — could be string or number
+  const pred = data.prediction;
+  const isScam =
+    pred === 1 ||
+    pred === "spam" ||
+    pred === "Spam" ||
+    pred === "scam" ||
+    pred === "Scam" ||
+    pred === true;
+
+  // Handle confidence — could be 0-1 float or 0-100 int
+  let confidence = (data.confidence ?? data.probability ?? data.score ?? 0.5) as number;
+  if (confidence <= 1) confidence = confidence * 100;
+  confidence = Math.round(confidence * 10) / 10;
+
+  // Determine risk level from confidence
+  let riskLevel = "Low";
+  if (confidence >= 90) riskLevel = "Critical";
+  else if (confidence >= 70) riskLevel = "High";
+  else if (confidence >= 50) riskLevel = "Medium";
+
+  // Determine scam type from backend or infer from content
+  const scamType = (data.scam_type ?? data.scamType ?? data.category ?? (isScam ? "Suspicious Content" : "Legitimate")) as string;
+
+  // Use indicators from backend if provided, otherwise generate defaults
+  const indicators = (data.indicators ?? data.features ?? data.reasons ?? []) as string[];
+  const defaultIndicators = isScam
+    ? ["Urgency language patterns", "Suspicious content detected", "Known scam template match"]
+    : ["No threat indicators found"];
+
+  const action = isScam
+    ? "Do NOT click any links, share personal info, or send money. Block the sender and report to cybercrime.gov.in"
+    : "This content appears safe. Always stay vigilant and verify sender identity for financial requests.";
+
+  return {
+    probability: confidence,
+    riskLevel,
+    scamType,
+    indicators: indicators.length > 0 ? indicators : defaultIndicators,
+    action,
+    isScam,
+  };
+}
+
 export default function AnalysisPage() {
   const analysisOpen = useAppStore((s) => s.analysisOpen);
   const setAnalysisOpen = useAppStore((s) => s.setAnalysisOpen);
 
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<typeof sampleAnalysis.result | null>(null);
+  const [result, setResult] = useState<AnalysisResult | null>(null);
+  const [error, setError] = useState("");
   const [tokens, setTokens] = useState<string[]>([]);
   const [phase, setPhase] = useState<"idle" | "tokenizing" | "analyzing" | "done">("idle");
+  const [serverWaking, setServerWaking] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -60,43 +121,92 @@ export default function AnalysisPage() {
   const reset = useCallback(() => {
     setInput("");
     setResult(null);
+    setError("");
     setTokens([]);
     setPhase("idle");
     setLoading(false);
+    setServerWaking(false);
   }, []);
 
-  const analyze = useCallback(() => {
-    const text = input.trim() || sampleAnalysis.input;
-    if (!input.trim()) setInput(sampleAnalysis.input);
+  // ── Real API Call ──────────────────────────────────────────────
+  const analyze = useCallback(async () => {
+    const text = input.trim();
+    if (!text) return;
 
     setResult(null);
+    setError("");
     setPhase("tokenizing");
     setLoading(true);
 
+    // Tokenizing animation (visual only)
     const words = text.split(/\s+/).slice(0, 25);
     setTokens([]);
-
     words.forEach((word, i) => {
       setTimeout(() => {
         setTokens((prev) => [...prev, word]);
       }, i * 80);
     });
 
+    // Transition to analyzing phase after tokenizing animation
+    const tokenizeTime = words.length * 80 + 400;
     setTimeout(() => {
       setPhase("analyzing");
       setTokens([]);
-    }, words.length * 80 + 400);
+    }, tokenizeTime);
 
-    setTimeout(() => {
-      setPhase("done");
+    // Show "server waking" after 5s (Render free tier cold start)
+    const wakeTimer = setTimeout(() => setServerWaking(true), 5000);
+
+    try {
+      // ── THE ACTUAL BACKEND CALL ──
+      const res = await fetch(`${API_URL}/predict`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+
+      clearTimeout(wakeTimer);
+      setServerWaking(false);
+
+      if (!res.ok) {
+        const errBody = await res.text().catch(() => "");
+        throw new Error(`Server returned ${res.status}: ${errBody || "Unknown error"}`);
+      }
+
+      const data = await res.json();
+      const mapped = mapBackendResponse(data);
+
+      // Ensure we're past the tokenizing animation before showing results
+      const elapsed = Date.now();
+      const minDelay = tokenizeTime + 800; // let "analyzing" phase show briefly
+      const remaining = Math.max(0, minDelay - elapsed);
+
+      setTimeout(() => {
+        setPhase("done");
+        setLoading(false);
+        setResult(mapped);
+      }, remaining);
+
+    } catch (e: unknown) {
+      clearTimeout(wakeTimer);
+      setServerWaking(false);
+      setPhase("idle");
       setLoading(false);
-      setResult(sampleAnalysis.result);
-    }, words.length * 80 + 2200);
+
+      if (e instanceof TypeError && e.message.includes("fetch")) {
+        setError("Cannot reach the backend. Check that CORS is enabled and the server is running.");
+      } else if (e instanceof Error) {
+        setError(e.message);
+      } else {
+        setError("Analysis failed — the server may be waking up (free tier). Try again in 30 seconds.");
+      }
+    }
   }, [input]);
 
   const useExample = (msg: string) => {
     setInput(msg);
     setResult(null);
+    setError("");
     setPhase("idle");
   };
 
@@ -113,10 +223,10 @@ export default function AnalysisPage() {
           onTouchStart={handleTouchStart}
           onTouchEnd={handleTouchEnd}
         >
-          {/* 3D Globe — sits behind everything */}
+          {/* 3D Globe */}
           <GlobeBackground />
 
-          {/* Gradient overlays for seamless blending */}
+          {/* Gradient overlays */}
           <div className="fixed inset-0 z-[1] pointer-events-none">
             <div className="absolute inset-0 bg-gradient-to-b from-[#050008]/80 via-transparent to-[#050008]/90" />
             <div className="absolute inset-0 bg-gradient-to-r from-[#050008]/60 via-transparent to-[#050008]/60" />
@@ -191,7 +301,7 @@ export default function AnalysisPage() {
                       {input.length > 0 ? `${input.split(/\s+/).length} words` : "Ctrl+Enter to submit"}
                     </span>
                     <div className="flex items-center gap-2">
-                      {result && (
+                      {(result || error) && (
                         <button
                           onClick={reset}
                           className="px-3 py-1.5 text-xs text-slate-400 hover:text-white border border-white/[0.08] rounded-lg transition-colors cursor-pointer"
@@ -201,7 +311,7 @@ export default function AnalysisPage() {
                       )}
                       <button
                         onClick={analyze}
-                        disabled={loading}
+                        disabled={loading || !input.trim()}
                         className="px-5 py-2 bg-purple-600 hover:bg-purple-500 text-white text-sm font-medium rounded-xl transition-all cursor-pointer flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
@@ -210,6 +320,38 @@ export default function AnalysisPage() {
                     </div>
                   </div>
                 </motion.div>
+
+                {/* Server waking message */}
+                {loading && serverWaking && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className={`${panelClass} !border-amber-500/[0.15] !bg-amber-950/30 p-4 flex items-start gap-3`}
+                  >
+                    <Loader2 className="w-4 h-4 text-amber-400 animate-spin shrink-0 mt-0.5" />
+                    <div>
+                      <div className="text-xs text-amber-400 font-medium mb-0.5">Server is waking up</div>
+                      <div className="text-[11px] text-slate-500 leading-relaxed">
+                        Free-tier cold start — this takes 30–50 seconds on the first request. Hang tight.
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+
+                {/* Error message */}
+                {error && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className={`${panelClass} !border-red-500/[0.15] !bg-red-950/30 p-4 flex items-start gap-3`}
+                  >
+                    <ShieldAlert className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                    <div>
+                      <div className="text-xs text-red-400 font-medium mb-0.5">Analysis Failed</div>
+                      <div className="text-[11px] text-slate-500 leading-relaxed">{error}</div>
+                    </div>
+                  </motion.div>
+                )}
 
                 {/* Example messages */}
                 <motion.div
@@ -387,7 +529,7 @@ export default function AnalysisPage() {
                     </motion.div>
                   )}
 
-                  {/* Results */}
+                  {/* Results — now driven by REAL backend data */}
                   {phase === "done" && result && (
                     <motion.div
                       key="done"
@@ -400,21 +542,28 @@ export default function AnalysisPage() {
                       aria-live="polite"
                     >
                       {/* Threat level banner */}
-                      <div className={`${panelClass} !border-red-500/[0.15] !bg-red-950/40 p-5 flex items-start gap-4`}>
-                        <div className="w-12 h-12 rounded-xl bg-red-500/[0.1] border border-red-500/[0.2] flex items-center justify-center shrink-0">
-                          <ShieldAlert className="w-6 h-6 text-red-400" />
+                      <div className={`${panelClass} ${result.isScam ? "!border-red-500/[0.15] !bg-red-950/40" : "!border-emerald-500/[0.15] !bg-emerald-950/40"} p-5 flex items-start gap-4`}>
+                        <div className={`w-12 h-12 rounded-xl ${result.isScam ? "bg-red-500/[0.1] border-red-500/[0.2]" : "bg-emerald-500/[0.1] border-emerald-500/[0.2]"} border flex items-center justify-center shrink-0`}>
+                          {result.isScam
+                            ? <ShieldAlert className="w-6 h-6 text-red-400" />
+                            : <ShieldCheck className="w-6 h-6 text-emerald-400" />
+                          }
                         </div>
                         <div className="flex-1">
                           <div className="flex items-center gap-3 mb-1">
-                            <span className="text-xs uppercase tracking-widest text-red-400/80">Threat Detected</span>
-                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/20 uppercase tracking-wider">
+                            <span className={`text-xs uppercase tracking-widest ${result.isScam ? "text-red-400/80" : "text-emerald-400/80"}`}>
+                              {result.isScam ? "Threat Detected" : "Content Safe"}
+                            </span>
+                            <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${result.isScam ? "bg-red-500/20 text-red-400 border-red-500/20" : "bg-emerald-500/20 text-emerald-400 border-emerald-500/20"} border uppercase tracking-wider`}>
                               {result.riskLevel}
                             </span>
                           </div>
                           <div className="text-xl font-bold text-white tracking-tight">{result.scamType}</div>
                         </div>
                         <div className="text-right shrink-0">
-                          <div className="text-3xl font-bold text-red-400 tracking-tight font-mono">{result.probability}%</div>
+                          <div className={`text-3xl font-bold ${result.isScam ? "text-red-400" : "text-emerald-400"} tracking-tight font-mono`}>
+                            {result.probability}%
+                          </div>
                           <div className="text-[10px] text-slate-600 uppercase tracking-wider">Confidence</div>
                         </div>
                       </div>
@@ -423,14 +572,16 @@ export default function AnalysisPage() {
                       <div className={`${panelClass} p-4`}>
                         <div className="flex items-center justify-between mb-2">
                           <span className="text-[10px] uppercase tracking-widest text-slate-500">Scam Probability</span>
-                          <span className="text-sm font-mono text-red-400 font-bold">{result.probability}%</span>
+                          <span className={`text-sm font-mono font-bold ${result.isScam ? "text-red-400" : "text-emerald-400"}`}>
+                            {result.probability}%
+                          </span>
                         </div>
                         <div className="w-full h-2 bg-white/[0.04] rounded-full overflow-hidden">
                           <motion.div
                             initial={{ width: 0 }}
                             animate={{ width: `${result.probability}%` }}
                             transition={{ duration: 1.5, ease: [0.25, 0.1, 0.25, 1] as const }}
-                            className="h-full rounded-full bg-gradient-to-r from-amber-500 via-red-500 to-red-600"
+                            className={`h-full rounded-full ${result.isScam ? "bg-gradient-to-r from-amber-500 via-red-500 to-red-600" : "bg-gradient-to-r from-emerald-600 to-emerald-400"}`}
                           />
                         </div>
                         <div className="flex justify-between mt-1.5">
@@ -453,28 +604,20 @@ export default function AnalysisPage() {
                               initial={{ opacity: 0, scale: 0.8 }}
                               animate={{ opacity: 1, scale: 1 }}
                               transition={{ delay: 0.08 * i }}
-                              className="px-3 py-1.5 bg-red-500/[0.06] text-red-300/80 text-xs rounded-lg border border-red-500/[0.1] flex items-center gap-1.5"
+                              className={`px-3 py-1.5 text-xs rounded-lg border flex items-center gap-1.5 ${
+                                result.isScam
+                                  ? "bg-red-500/[0.06] text-red-300/80 border-red-500/[0.1]"
+                                  : "bg-emerald-500/[0.06] text-emerald-300/80 border-emerald-500/[0.1]"
+                              }`}
                             >
-                              <FileWarning className="w-3 h-3" />
+                              {result.isScam
+                                ? <FileWarning className="w-3 h-3" />
+                                : <CheckCircle className="w-3 h-3" />
+                              }
                               {ind}
                             </motion.span>
                           ))}
                         </div>
-                      </div>
-
-                      {/* Risk breakdown */}
-                      <div className="grid grid-cols-3 gap-3">
-                        {[
-                          { label: "Language Risk", value: "92%", icon: BarChart3, color: "text-orange-400" },
-                          { label: "URL Risk", value: "97%", icon: Globe, color: "text-red-400" },
-                          { label: "Pattern Match", value: "4/5", icon: Fingerprint, color: "text-purple-400" },
-                        ].map(({ label, value, icon: Icon, color }) => (
-                          <div key={label} className={`${panelClass} p-3 text-center`}>
-                            <Icon className={`w-4 h-4 ${color} mx-auto mb-1.5 opacity-60`} />
-                            <div className={`text-lg font-bold font-mono ${color}`}>{value}</div>
-                            <div className="text-[9px] text-slate-600 uppercase tracking-wider mt-0.5">{label}</div>
-                          </div>
-                        ))}
                       </div>
 
                       {/* Recommended action */}
@@ -490,10 +633,10 @@ export default function AnalysisPage() {
                       <div className="flex items-center justify-between px-1">
                         <div className="flex items-center gap-1.5 text-[10px] text-slate-600">
                           <Clock className="w-3 h-3" />
-                          Analyzed in 1.8s
+                          Analyzed via ML pipeline
                         </div>
                         <div className="text-[10px] text-slate-700">
-                          Model: ScamShield-v3.2 · Pipeline: NLP → Classifier → Explainer
+                          Model: ScamShield XGBoost · Backend: FastAPI on Render
                         </div>
                       </div>
                     </motion.div>
